@@ -1,2 +1,2 @@
 # memePoker
-a new poker game featured decentralization
+a new poker game based solana
