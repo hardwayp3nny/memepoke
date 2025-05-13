@@ -1,82 +1,46 @@
-import React, { useState } from 'react';
-import './styles/main.css';
-import PokerGame from './components/PokerGame';
-import Blackjack from './components/Blackjack';
+import React, { useMemo } from 'react';
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { ConnectionProvider, WalletProvider } from '@solana/wallet-adapter-react';
+import { WalletAdapterNetwork } from '@solana/wallet-adapter-base';
+import { PhantomWalletAdapter } from '@solana/wallet-adapter-wallets';
+import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
+import { clusterApiUrl } from '@solana/web3.js';
 
-const GAME_LIST = [
-  { key: 'blackjack', label: 'Blackjack' },
-];
+// 导入钱包适配器样式
+import '@solana/wallet-adapter-react-ui/styles.css';
+
+// 导入组件
+import Blackjack from './components/Blackjack';
+import Layout from './components/Layout';
+import Home from './components/Home';
+import './styles/main.css';
 
 function App() {
-  const [selectedGame, setSelectedGame] = useState('blackjack');
-  const [isWalletConnected, setIsWalletConnected] = useState(false);
-  const [walletAddress, setWalletAddress] = useState('');
+  // 可以根据需要选择网络
+  const network = WalletAdapterNetwork.Devnet;
+  const endpoint = clusterApiUrl(network);
 
-  const connectWallet = async () => {
-    try {
-      if (window.solana && window.solana.isPhantom) {
-        const response = await window.solana.connect();
-        setWalletAddress(response.publicKey.toString());
-        setIsWalletConnected(true);
-      } else {
-        window.open('https://phantom.app/', '_blank');
-      }
-    } catch (error) {
-      console.error('连接钱包失败:', error);
-    }
-  };
-
-  const disconnectWallet = async () => {
-    try {
-      await window.solana.disconnect();
-      setWalletAddress('');
-      setIsWalletConnected(false);
-    } catch (error) {
-      console.error('断开钱包连接失败:', error);
-    }
-  };
+  // 初始化钱包适配器，只使用Phantom
+  const wallets = useMemo(
+    () => [new PhantomWalletAdapter()],
+    []
+  );
 
   return (
-    <div className="layout-container" style={{width: '100%', minHeight: '100vh', overflowX: 'hidden' }}>
-      {/* Top Navbar */}
-      <div className="navbar">
-        <div className="navbar-logo" style={{ display: 'flex', alignItems: 'center', height: '40px' }}>
-          <img src="/image/logo.png" alt="logo" style={{ height: '40px', width: 'auto', marginRight: '1rem' }} />
-        </div>
-        <div className="ml-4">
-          <div className="avatar">
-            <span className="text-xl">👤</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Main Content Area */}
-      <div className="content-container">
-        {/* Left Panel */}
-        <div className="panel panel-left" style={{ width: 180}}>
-          <h2 className="panel-title">Game List</h2>
-          <div className="space-y-2">
-            {GAME_LIST.map(game => (
-              <div
-                key={game.key}
-                className={`panel-item${selectedGame === game.key ? ' selected' : ''}`}
-                style={{ cursor: 'pointer', fontWeight: selectedGame === game.key ? 'bold' : 'normal', background: selectedGame === game.key ? '#2563eb' : undefined, color: selectedGame === game.key ? '#fff' : undefined }}
-                onClick={() => setSelectedGame(game.key)}
-              >
-                {game.label}
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Center Panel */}
-        <div className="panel panel-center" style={{ width: '79%'}}>
-          {selectedGame === 'blackjack' && <Blackjack />}
-        </div>
-
-        
-      </div>
-    </div>
+    <ConnectionProvider endpoint={endpoint}>
+      <WalletProvider wallets={wallets} autoConnect>
+        <WalletModalProvider>
+          <Router>
+            <Layout>
+              <Routes>
+                <Route path="/" element={<Home />} />
+                <Route path="/blackjack" element={<Blackjack />} />
+              </Routes>
+            </Layout>
+          </Router>
+        </WalletModalProvider>
+      </WalletProvider>
+    </ConnectionProvider>
   );
 }
 

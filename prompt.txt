@@ -1,3 +1,0 @@
-在工具栏新增dowble按钮，编辑handledoubledown的处理逻辑（点击double按钮），首先判断，当前玩家手牌如果不相同，手牌数量若大于两张，或playerturn为false时double按钮无效，否则执行double逻辑，设置一个double状态值，页面在double状态时，工具栏中的按钮全部失效，将当前两张牌左右分开，各自下方展示一个新的deal和open按钮，构建新的按钮样式，比工具栏的按钮尺寸稍小，代表玩家现在掌握着两副牌可以同时参与游戏（庄家手牌依旧只有一副），并给这两副牌分别加一张牌，各执行一次checkgameresult（相当于首次发牌时的特殊判断，各与庄家进行比较），double模式下的子局不考虑double情况，两幅牌中有一副牌若获胜，则这半边游戏结束，显示获胜，然后玩家可以在两副牌中执行deal或者open，逻辑与非double形式下的游戏过程一致，
-
-在checkgameresult函数中写一个专门在double模式下的结果判定，多传入doublestate和rightleft（表示这是左边的子局或者右边的子局）参数，例如，左子局进行游戏时，判定后游戏结束（平局、爆点、blackjack等等）则将leftplayerturn设为false，右子局同理

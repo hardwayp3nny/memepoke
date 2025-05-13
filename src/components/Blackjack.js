@@ -1,25 +1,35 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { Connection, PublicKey, Transaction, SystemProgram } from '@solana/web3.js';
+import { getAssociatedTokenAddress, createTransferInstruction, createAssociatedTokenAccountInstruction } from '@solana/spl-token';
+import bs58 from 'bs58';
+import { useWallet } from '@solana/wallet-adapter-react';
+import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
+import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 
 const dealers = [
   {
     avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=dealer1',
     nickname: 'Dealer Alice',
-    bet: 500
+    bet: 500,
+    lp: 500
   },
   {
     avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=dealer2',
     nickname: 'Dealer Bob',
-    bet: 800
+    bet: 800,
+    lp: 800
   },
   {
     avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=dealer3',
     nickname: 'Dealer Carol',
-    bet: 1200
+    bet: 1200,
+    lp: 1200
   },
   {
     avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=dealer6',
     nickname: 'Dealer Frank',
-    bet: 700
+    bet: 700,
+    lp: 700
   }
 ];
 
@@ -99,30 +109,303 @@ function Blackjack() {
   const [dealerList, setDealerList] = useState(dealers);
   const [isWalletConnected, setIsWalletConnected] = useState(false);
   const [walletAddress, setWalletAddress] = useState('');
+  const [showWalletModal, setShowWalletModal] = useState(false);
+  const [selectedWallet, setSelectedWallet] = useState(null);
+  const [tokenBalance, setTokenBalance] = useState(0);
+  const [isLoading, setIsLoading] = useState(false);
+  const [challenge, setChallenge] = useState('');
+  const [isAuthenticating, setIsAuthenticating] = useState(false);
+  const [authToken, setAuthToken] = useState(null);
+  const [nominatePoolUSDT, setNominatePoolUSDT] = useState(totalBet);
 
-  // 连接钱包函数
-  const connectWallet = async () => {
-    try {
-      if (window.solana && window.solana.isPhantom) {
-        const response = await window.solana.connect();
-        setWalletAddress(response.publicKey.toString());
-        setIsWalletConnected(true);
-      } else {
-        window.open('https://phantom.app/', '_blank');
+  // 使用Solana钱包适配器
+  const wallet = useWallet();
+  const { setVisible } = useWalletModal();
+
+  // 监听钱包连接状态
+  useEffect(() => {
+    if (wallet.connected && wallet.publicKey) {
+      handleWalletConnected(wallet.publicKey.toString());
+    } else {
+      // 钱包断开连接
+      if (isWalletConnected) {
+        setWalletAddress('');
+        setIsWalletConnected(false);
+        setTokenBalance(0);
+        setAuthToken(null);
+        localStorage.removeItem('authToken');
       }
+    }
+  }, [wallet.connected, wallet.publicKey]);
+
+  // 处理钱包连接成功
+  const handleWalletConnected = async (address) => {
+    try {
+      setIsLoading(true);
+      setWalletAddress(address);
+      setIsWalletConnected(true);
+      
+      // 获取真实的代币余额
+      try {
+        const balance = await getTokenBalance(address, 'solana');
+        console.log('获取到的代币余额:', balance);
+      } catch (balanceError) {
+        console.error('获取代币余额失败:', balanceError);
+        // 如果获取余额失败，设置一个默认值
+        setTokenBalance(1000);
+      }
+      
+      setCenterTip('钱包连接成功');
+      setCenterTipPulse(true);
+      setTimeout(() => setCenterTipPulse(false), 2000);
+      
     } catch (error) {
-      console.error('连接钱包失败:', error);
+      console.error('钱包连接处理失败:', error);
+      setCenterTip('连接处理失败，请重试');
+      setCenterTipPulse(true);
+      setWalletAddress('');
+      setIsWalletConnected(false);
+    } finally {
+      setIsLoading(false);
+      setIsAuthenticating(false);
+    }
+  };
+
+  // 打开钱包选择弹窗
+  const openWalletModal = () => {
+    setVisible(true);
+  };
+
+  // 请求签名挑战
+  const requestChallenge = async (address) => {
+    try {
+      const response = await fetch('/api/auth/challenge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ walletAddress: address })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message);
+      return data.challenge;
+    } catch (error) {
+      console.error('获取签名挑战失败:', error);
+      throw error;
+    }
+  };
+
+  // 验证签名
+  const verifySignature = async (address, signature, message) => {
+    try {
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          walletAddress: address,
+          signature,
+          message
+        })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message);
+      return data.token;
+    } catch (error) {
+      console.error('验证签名失败:', error);
+      throw error;
     }
   };
 
   // 断开钱包连接函数
   const disconnectWallet = async () => {
     try {
-      await window.solana.disconnect();
+      setIsLoading(true);
+      
+      if (wallet.connected && wallet.disconnect) {
+        await wallet.disconnect();
+      }
+      
+      // 清除认证信息
+      localStorage.removeItem('authToken');
       setWalletAddress('');
       setIsWalletConnected(false);
+      setTokenBalance(0);
+      setChallenge('');
+      setAuthToken(null);
+      
+      setCenterTip('钱包已断开连接');
+      setCenterTipPulse(true);
+      setTimeout(() => setCenterTipPulse(false), 2000);
     } catch (error) {
       console.error('断开钱包连接失败:', error);
+      setCenterTip('断开连接失败');
+      setCenterTipPulse(true);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // 获取代币余额
+  const getTokenBalance = async (address, chain) => {
+    try {
+      if (chain === 'solana') {
+        const connection = new Connection('https://api.devnet.solana.com');
+        const publicKey = new PublicKey(address);
+        
+        // 首先获取SOL余额
+        const solBalance = await connection.getBalance(publicKey);
+        console.log('SOL Balance:', solBalance / 1e9); // 转换为SOL单位
+        
+        try {
+          // 尝试获取USDT代币余额
+          const tokenMint = new PublicKey(USDT_MINT);
+          const tokenAccount = await getAssociatedTokenAddress(
+            tokenMint,
+            publicKey
+          );
+          
+          // 查询代币余额
+          const balance = await connection.getTokenAccountBalance(tokenAccount);
+          const uiBalance = balance.value.uiAmount || 0;
+          setTokenBalance(uiBalance);
+          console.log('Token Balance:', uiBalance);
+          return uiBalance;
+        } catch (e) {
+          console.log('Token account not found, using SOL balance instead');
+          // 如果没有USDT代币账户，使用SOL余额代替
+          const solUiBalance = solBalance / 1e9;
+          setTokenBalance(solUiBalance);
+          return solUiBalance;
+        }
+      } else if (chain === 'ethereum') {
+        console.log('Ethereum token balance not implemented');
+        setTokenBalance(100); // 暂时设置一个示例值
+        return 1000;
+      }
+    } catch (error) {
+      console.error('获取代币余额失败:', error);
+      setTokenBalance(0);
+      return 0;
+    }
+  };
+
+  // USDT SPL Token 主网地址
+  const USDT_MINT = 'Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr';
+
+  // USDT转账函数
+  const handleUSDTTransfer = async (amount) => {
+    if (!isWalletConnected || !wallet.connected) {
+      setCenterTip('请先连接钱包');
+      setCenterTipPulse(true);
+      return false;
+    }
+    
+    try {
+      setIsLoading(true);
+      setCenterTip('准备交易...');
+      
+      // 检查余额是否足够
+      const currentBalance = await getTokenBalance(walletAddress, 'solana');
+      if (currentBalance < amount) {
+        setCenterTip(`余额不足，需要 ${amount} USDT`);
+        setCenterTipPulse(true);
+        setIsLoading(false);
+        return false;
+      }
+      
+      // 创建USDT转账交易
+      const connection = new Connection('https://api.devnet.solana.com');
+      const fromWallet = wallet.publicKey;
+      const toWallet = new PublicKey('8eP5dhehFdXEUCV3GuVafD1StnWKRBSNj4usaUSAYdjv');
+      const tokenMint = new PublicKey(USDT_MINT);
+      
+      // 获取发送方和接收方的代币账户
+      const fromTokenAccount = await getAssociatedTokenAddress(
+        tokenMint,
+        fromWallet
+      );
+      
+      const toTokenAccount = await getAssociatedTokenAddress(
+        tokenMint,
+        toWallet
+      );
+      
+      // 创建交易
+      let transaction = new Transaction();
+      
+      // 检查接收方代币账户是否存在，不存在则创建
+      try {
+        const toAccountInfo = await connection.getAccountInfo(toTokenAccount);
+        if (!toAccountInfo) {
+          // 创建接收方关联账户的指令
+          const createATAIx = createAssociatedTokenAccountInstruction(
+            fromWallet,
+            toTokenAccount,
+            toWallet,
+            tokenMint
+          );
+          transaction.add(createATAIx);
+        }
+      } catch (error) {
+        console.log('检查接收方账户出错，尝试创建:', error);
+        // 创建接收方关联账户的指令
+        const createATAIx = createAssociatedTokenAccountInstruction(
+          fromWallet,
+          toTokenAccount,
+          toWallet,
+          tokenMint
+        );
+        transaction.add(createATAIx);
+      }
+      
+      // USDT精度为6位小数
+      const usdtAmount = Math.floor(amount * 1e6);
+      
+      // 构建转账指令
+      const transferIx = createTransferInstruction(
+        fromTokenAccount,
+        toTokenAccount,
+        fromWallet,
+        usdtAmount
+      );
+      
+      transaction.add(transferIx);
+      transaction.feePayer = fromWallet;
+      transaction.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+      
+      try {
+        setCenterTip('PLEASE CONFIRM...');
+        const signedTx = await wallet.signTransaction(transaction);
+        
+        // 发送签名后的交易
+        setCenterTip('SENDING TRANSACTION...');
+        const txid = await connection.sendRawTransaction(signedTx.serialize());
+        
+        // 等待交易确认
+        setCenterTip('WAITING FOR CONFIRMATION...');
+        await connection.confirmTransaction(txid, 'confirmed');
+        
+        // 更新余额
+        await getTokenBalance(walletAddress, 'solana');
+        
+        setCenterTip('SUCCESS, DEALING...');
+        // 3秒后清除提示内容
+        setTimeout(() => {
+          setCenterTip('');
+        }, 2000);
+        setIsLoading(false);
+        return true;
+      } catch (signError) {
+        console.error('TRANSACTION SIGNING OR SENDING FAILED:', signError);
+        setCenterTip('TRANSACTION REJECTED, PLEASE TRY AGAIN');
+        setCenterTipPulse(true);
+        setIsLoading(false);
+        return false;
+      }
+    } catch (err) {
+      console.error('TRANSACTION FAILED:', err);
+      setCenterTip('TRANSACTION FAILED, PLEASE TRY AGAIN');
+      setCenterTipPulse(true);
+      setIsLoading(false);
+      return false;
     }
   };
 
@@ -399,7 +682,7 @@ function Blackjack() {
   };
 
   // 发牌逻辑
-  const handleDeal = () => {
+  const handleDeal = async () => {
     // 只有在未发牌且未下注时才需要下注
     if (!hasBet && playerCards.length === 0 && !playerTurn) {
       setCenterTip('Please place a bet!');
@@ -409,6 +692,9 @@ function Blackjack() {
     }
     // 首次发牌
     if (playerCards.length === 0 && hasBet && !playerTurn) {
+      const currentBet = tableChips.reduce((sum, chip) => sum + chip.value, 0);
+      const success = await handleUSDTTransfer(currentBet);
+      if (!success) return;
       let d = getPokerDeck();
       let [pCards, d1] = getRandomCards(d, 2);
       let [dlCards, d2] = getRandomCards(d1, 2);
@@ -420,7 +706,6 @@ function Blackjack() {
       setPlayerStand(false);
       setGameResult('');
       setBetEntry(false);
-      
       setTimeout(() => {
         checkGameResult(pCards, dlCards, true);
       }, 100);
@@ -431,7 +716,6 @@ function Blackjack() {
       const newPlayerCards = [...playerCards, ...playerCard];
       setPlayerCards(newPlayerCards);
       setDeck(newDeck);
-      
       checkGameResult(newPlayerCards, dealerCards);
     }
   };
@@ -551,40 +835,203 @@ function Blackjack() {
     checkGameResult(rightHandCards, dCards, false, true, true, 'right');
   };
 
-  const handleBetConfirm = () => {
+  const handleBetConfirm = async () => {
     if (!isWalletConnected) {
       setCenterTip('Please connect wallet first!');
       setCenterTipPulse(true);
       setTimeout(() => setCenterTipPulse(false), 2000);
       return;
     }
-    setPlayerChips(2500); // 设置玩家初始筹码为2500
-    setGameStarted(true);
-    setShowBetInput(false);
-    setHasBet(false);
-    setCenterTip('place a bet');
-    setCenterTipPulse(false);
-    setPlayerCards([]);
-    setDealerCards([]);
-    setTableChips([]);
+    
+    try {
+      // 创建一个简单的交易来触发签名
+      const connection = new Connection('https://api.devnet.solana.com');
+      const fromWallet = wallet.publicKey;
+      
+      // 创建一个空交易，只是为了触发签名
+      let transaction = new Transaction();
+      
+      // 添加一个系统程序的指令，转账0.000001 SOL给自己，只是为了触发签名
+      transaction.add(
+        SystemProgram.transfer({
+          fromPubkey: fromWallet,
+          toPubkey: fromWallet,
+          lamports: 1000, // 0.000001 SOL
+        })
+      );
+      
+      transaction.feePayer = fromWallet;
+      transaction.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+      
+      setCenterTip('PLEASE CONFIRM...');
+      const signedTx = await wallet.signTransaction(transaction);
+      
+      // 这里不实际发送交易，只是验证签名成功
+      setCenterTip('SUCCESS, LETS GO!');
+      
+      // 设置游戏状态
+      setPlayerChips(2500); // 设置玩家初始筹码为2500
+      setGameStarted(true);
+      setShowBetInput(false);
+      setHasBet(false);
+      setCenterTip('place a bet');
+      setCenterTipPulse(false);
+      setPlayerCards([]);
+      setDealerCards([]);
+      setTableChips([]);
+    } catch (error) {
+      console.error('TRANSACTION SIGNING FAILED:', error);
+      setCenterTip('TRANSACTION SIGNING FAILED');
+      setCenterTipPulse(true);
+    }
   };
 
   // 处理入金
-  const handleDeposit = () => {
+  const handleDeposit = async () => {
     const betNum = parseInt(dealerBet, 10);
     if (isNaN(betNum) || betNum <= 0 || !dealerName.trim()) return;
 
-    const newDealer = {
-      avatar: `https://api.dicebear.com/7.x/bottts/svg?seed=${dealerName}`,
-      nickname: dealerName,
-      bet: betNum
-    };
+    try {
+      // 创建一个简单的交易来触发签名
+      const connection = new Connection('https://api.devnet.solana.com');
+      const fromWallet = wallet.publicKey;
+      
+      // 创建一个空交易，只是为了触发签名
+      let transaction = new Transaction();
+      
+      // 添加一个系统程序的指令，转账0.000001 SOL给自己，只是为了触发签名
+      transaction.add(
+        SystemProgram.transfer({
+          fromPubkey: fromWallet,
+          toPubkey: fromWallet,
+          lamports: 1000, // 0.000001 SOL
+        })
+      );
+      
+      transaction.feePayer = fromWallet;
+      transaction.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+      
+      setCenterTip('PLEASE CONFIRM...');
+      const signedTx = await wallet.signTransaction(transaction);
+      
+      // 这里不实际发送交易，只是验证签名成功
+      setCenterTip('PROCESSING...');
+      
+      // 计算LP价格和获得的LP数量
+      const currentLpPrice = nominatePoolUSDT > 0 ? dealerTotalBet / nominatePoolUSDT : 1.0;
+      const lpAmount = betNum / currentLpPrice;
+      
+      const newDealer = {
+        avatar: `https://api.dicebear.com/7.x/bottts/svg?seed=${dealerName}`,
+        nickname: dealerName,
+        bet: betNum,
+        lp: lpAmount
+      };
 
-    setDealerList(prev => [...prev, newDealer]);
-    setDealerTotalBet(prev => prev + betNum);
-    setShowDepositModal(false);
-    setDealerName('');
-    setDealerBet('');
+      setDealerList(prev => [...prev, newDealer]);
+      setDealerTotalBet(prev => prev + betNum);
+      // 更新nominatePoolUSDT
+      setNominatePoolUSDT(prev => prev + betNum);
+      setShowDepositModal(false);
+      setDealerName('');
+      setDealerBet('');
+      
+      setCenterTip('SUCCESS!');
+      setTimeout(() => setCenterTip(''), 2000);
+    } catch (error) {
+      console.error('DEPOSIT FAILED:', error);
+      setCenterTip('DEPOSIT FAILED');
+      setCenterTipPulse(true);
+    }
+  };
+
+  // 处理退出游戏
+  const handleQuit = async () => {
+    if (!isWalletConnected || !wallet.connected) {
+      setGameStarted(false);
+      resetGameState();
+      return;
+    }
+    
+    try {
+      setIsLoading(true);
+      setCenterTip('READY TO QUIT...');
+      
+      // 创建一个向自己转账的交易
+      const connection = new Connection('https://api.devnet.solana.com');
+      const fromWallet = wallet.publicKey;
+      
+      // 创建交易
+      let transaction = new Transaction();
+      
+      // 添加一个系统程序的指令，转账0.00001 SOL给自己
+      transaction.add(
+        SystemProgram.transfer({
+          fromPubkey: fromWallet,
+          toPubkey: fromWallet,
+          lamports: 10000, // 0.00001 SOL
+        })
+      );
+      
+      transaction.feePayer = fromWallet;
+      transaction.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+      
+      try {
+        setCenterTip('PLEASE CONFIRM...');
+        const signedTx = await wallet.signTransaction(transaction);
+        
+        // 发送签名后的交易
+        const txid = await connection.sendRawTransaction(signedTx.serialize());
+        console.log('TRANSACTION ID:', txid);
+        
+        // 等待交易确认
+        setCenterTip('CONFIRMING...');
+        await connection.confirmTransaction(txid, 'confirmed');
+        
+        setCenterTip('SUCCESS!');
+      } catch (signError) {
+        console.error('TRANSACTION SIGNING OR SENDING FAILED:', signError);
+        setCenterTip('TRANSACTION REJECTED, BUT STILL QUIT GAME');
+      }
+      
+      // 无论交易是否成功，都退出游戏
+      setTimeout(() => {
+        setGameStarted(false);
+        resetGameState();
+        setIsLoading(false);
+      }, 1000);
+      
+    } catch (error) {
+      console.error('QUIT GAME FAILED:', error);
+      setCenterTip('QUIT GAME FAILED');
+      setCenterTipPulse(true);
+      // 仍然退出游戏
+      setGameStarted(false);
+      resetGameState();
+      setIsLoading(false);
+    }
+  };
+  
+  // 重置游戏状态的辅助函数
+  const resetGameState = () => {
+    setPlayerCards([]);
+    setDealerCards([]);
+    setDeck(getPokerDeck());
+    setTableChips([]);
+    setHasBet(false);
+    setCenterTip('');
+    setCenterTipPulse(false);
+    setPlayerTurn(false);
+    setGameResult('');
+    setPlayerStand(false);
+    setBetEntry(false);
+    setIsDoubleMode(false);
+    setLeftHandCards([]);
+    setRightHandCards([]);
+    setLeftHandStand(false);
+    setRightHandStand(false);
+    setLeftHandTurn(false);
+    setRightHandTurn(false);
   };
 
   return (
@@ -625,7 +1072,7 @@ function Blackjack() {
                       ))}
                   <div className="bj-table-cards">
                     <div className="bj-bet-row bj-bet-row-dealer">
-                      <span className="bj-bet-chip bj-bet-chip-dealer">Chips: ${dealerTotalBet}</span>
+                      <span className="bj-bet-chip bj-bet-chip-dealer"></span>
                     </div>
                     <div className="bj-table-row bj-table-row-dealer">
                       <div className="bj-cards">
@@ -653,7 +1100,7 @@ function Blackjack() {
                       </div>
                     </div>
                     <div className="bj-bet-row bj-table-row-player">
-                      <span className="bj-bet-chip bj-bet-chip-player">Chips: ${playerChips}</span>
+                      <span className="bj-bet-chip bj-bet-chip-player">Chips: ${tokenBalance}</span>
                     </div>
                   </div>
                 </>
@@ -693,7 +1140,7 @@ function Blackjack() {
                       </button>
                       <button 
                         className="blackjack-finish-btn" 
-                        onClick={() => setGameStarted(false)}
+                        onClick={handleQuit}
                         disabled={tableChips.length > 0}
                         style={{ 
                           backgroundColor: tableChips.length === 0 ? '#ef4444' : '#6b7280',
@@ -742,17 +1189,26 @@ function Blackjack() {
                     {isWalletConnected ? (
                       <div className="bj-bet-wallet-info">
                         <span className="bj-bet-wallet-address">{`${walletAddress.slice(0, 4)}...${walletAddress.slice(-4)}`}</span>
-                        <button className="bj-bet-wallet-btn disconnect" onClick={disconnectWallet}>
-                          Disconnect
+                        <span className="bj-bet-wallet-balance">BAL: {tokenBalance} USDT</span>
+                        <button className="bj-bet-wallet-btn disconnect" onClick={disconnectWallet} disabled={isLoading}>
+                          {isLoading ? 'PROCESSING...' : 'DISCONNECT'}
                         </button>
                       </div>
                     ) : (
-                      <button className="bj-bet-wallet-btn connect" onClick={connectWallet}>
-                        Connect Wallet
-                      </button>
+                      <div className="wallet-img-select-row">
+                        {isLoading ? (
+                          <div className="wallet-loading">connceting...</div>
+                        ) : (
+                          <div className="wallet-adapter-container">
+                            <WalletMultiButton className="wallet-adapter-button" />
+                          </div>
+                        )}
+                      </div>
                     )}
                   </div>
-                  <button className="bj-bet-confirm" onClick={handleBetConfirm} disabled={!isWalletConnected} style={{ backgroundColor: !isWalletConnected ? '#6b7280' : '#4ade80' }}>Confirm</button>
+                  <button className="bj-bet-confirm" onClick={handleBetConfirm} disabled={!isWalletConnected || isLoading} style={{ backgroundColor: !isWalletConnected ? '#6b7280' : '#4ade80' }}>
+                    {isLoading ? 'PROCESSING...' : 'CONFIRM'}
+                  </button>
                 </div>
               </div>
             )}
@@ -761,20 +1217,21 @@ function Blackjack() {
         {/* 右侧：summary和panel纵向排列 */}
         <div className={`blackjack-right ${gameStarted ? 'slide-out' : ''}`}>
           <div className="blackjack-dealer-summary">
-            <span>Total Dealers: <b>{dealerList.length}</b></span>
-            <span>Total Bets: <b>${dealerTotalBet}</b></span>
+            <span>Dealers: <b>{dealerList.length}</b></span>
+            <span>USDT: <b>{dealerTotalBet}</b></span>
+            <span>LP price: <b>{nominatePoolUSDT > 0 ? (dealerTotalBet / nominatePoolUSDT).toFixed(3) : '1.0'}</b></span>
           </div>
           <div className="blackjack-dealer-panel">
             <div className="blackjack-dealer-content">
               <div className="blackjack-dealer-header">
                 <span className="blackjack-dealer-title">TOP 5 DEALER</span>
               </div>
-              {[...dealerList].sort((a, b) => b.bet - a.bet).slice(0, 5).map((dealer, idx) => (
+              {[...dealerList].sort((a, b) => b.lp - a.lp).slice(0, 5).map((dealer, idx) => (
                 <div key={idx} className="blackjack-dealer-item">
                   <img src={dealer.avatar} alt={dealer.nickname} className="blackjack-dealer-avatar" />
                   <div className="blackjack-dealer-info">
                     <div className="blackjack-dealer-nickname">{dealer.nickname}</div>
-                    <div className="blackjack-dealer-bet">Bet: ${dealer.bet}</div>
+                    <div className="blackjack-dealer-bet">LP: {dealer.lp.toFixed(3)}</div>
                   </div>
                 </div>
               ))}
@@ -785,7 +1242,7 @@ function Blackjack() {
             </div>
           </div>
         </div>
-        <div className={`blackjack-right ${gameStarted ? 'slide-out' : ''}`}>
+        {/* <div className={`blackjack-right ${gameStarted ? 'slide-out' : ''}`}>
           <div className="blackjack-dealer-summary blackjack-existing-games">
             <span>Number: <b>{dealerTotalBet}</b></span>
           </div>
@@ -797,7 +1254,7 @@ function Blackjack() {
               
             </div>
           </div>
-        </div>
+        </div> */}
       </div>
       {/* 入金弹窗 */}
       {showDepositModal && (
@@ -825,7 +1282,7 @@ function Blackjack() {
             </div>
             <button className="bj-bet-confirm" onClick={async () => {
               if (!isWalletConnected) {
-                await connectWallet();
+                await handleWalletConnected(wallet.publicKey.toString());
               }
               handleDeposit();
             }}>INJECT</button>
